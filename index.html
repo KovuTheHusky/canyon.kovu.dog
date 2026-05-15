@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Windows MIDI Player</title>
+    <style>
+      /* The Desktop */
+      body,
+      html {
+        margin: 0;
+        padding: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        font-family: Tahoma, "Segoe UI", sans-serif;
+        background: url("bliss.png") no-repeat center center fixed;
+        background-size: cover;
+      }
+
+      /* The Taskbar */
+      #taskbar {
+        position: absolute;
+        bottom: 0;
+        left: 0;
+        width: 100%;
+        height: 30px;
+        background: linear-gradient(
+          to bottom,
+          #245edb 0%,
+          #3f8cf3 9%,
+          #245edb 18%,
+          #245edb 92%,
+          #333 100%
+        );
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        z-index: 1000;
+      }
+
+      /* The Start Button */
+      #start-button {
+        height: 100%;
+        padding: 0 20px 0 15px;
+        background: linear-gradient(to bottom, #388d22 0%, #1e5a11 100%);
+        color: white;
+        font-style: italic;
+        font-weight: bold;
+        font-size: 14px;
+        border: none;
+        border-radius: 0 10px 10px 0;
+        box-shadow:
+          inset 1px 1px 2px rgba(255, 255, 255, 0.5),
+          2px 0px 3px rgba(0, 0, 0, 0.3);
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+      }
+
+      #start-button:active {
+        background: linear-gradient(to bottom, #1e5a11 0%, #388d22 100%);
+        box-shadow: inset 2px 2px 4px rgba(0, 0, 0, 0.5);
+      }
+
+      /* The System Tray */
+      #systray {
+        height: 100%;
+        padding: 0 15px;
+        background: linear-gradient(to bottom, #0ea3e4 0%, #0977d6 100%);
+        border-left: 1px solid #1042af;
+        color: white;
+        font-size: 11px;
+        display: flex;
+        align-items: center;
+        box-shadow: inset 1px 0px 1px rgba(255, 255, 255, 0.4);
+      }
+    </style>
+
+    <script type="importmap">
+      {
+        "imports": {
+          "spessasynth_lib": "https://cdn.jsdelivr.net/npm/spessasynth_lib@latest/dist/index.js",
+          "spessasynth_core": "https://cdn.jsdelivr.net/npm/spessasynth_core@latest/dist/index.js"
+        }
+      }
+    </script>
+  </head>
+  <body>
+    <div id="taskbar">
+      <button id="start-button"><i>start</i></button>
+
+      <div id="systray">
+        <span id="clock">12:00 PM</span>
+      </div>
+    </div>
+
+    <script type="module">
+      // Because of the import map above, the browser knows exactly where to pull these from
+      import { Sequencer, WorkletSynthesizer } from "spessasynth_lib";
+
+      const startButton = document.getElementById("start-button");
+      let isPlaying = false;
+
+      function updateClock() {
+        const now = new Date();
+        document.getElementById("clock").innerText = now.toLocaleTimeString(
+          [],
+          { hour: "2-digit", minute: "2-digit" },
+        );
+      }
+      setInterval(updateClock, 1000);
+      updateClock();
+
+      // The standalone processor file is required for the background thread
+      const WORKLET_URL =
+        "https://cdn.jsdelivr.net/npm/spessasynth_lib@latest/dist/spessasynth_processor.js";
+      const WORKLET_URL_MIN =
+        "https://cdn.jsdelivr.net/npm/spessasynth_lib@latest/dist/spessasynth_processor.min.js";
+
+      startButton.addEventListener("click", async () => {
+        if (isPlaying) return;
+
+        try {
+          startButton.innerHTML = "<i>loading...</i>";
+
+          // 1. Fetch DLS and MIDI in parallel to speed up load time
+          const [dlsResponse, midiResponse] = await Promise.all([
+            fetch("gm.dls"),
+            fetch("canyon.mid"),
+          ]);
+
+          const dlsBuffer = await dlsResponse.arrayBuffer();
+          const midiBuffer = await midiResponse.arrayBuffer();
+
+          // 2. Initialize the Audio Context
+          const context = new AudioContext();
+
+          // Load the Worklet Processor (with a minified fallback just in case)
+          try {
+            await context.audioWorklet.addModule(WORKLET_URL);
+          } catch (e) {
+            await context.audioWorklet.addModule(WORKLET_URL_MIN);
+          }
+
+          // 3. Create the Synthesizer using the new WorkletSynthesizer class
+          const synth = new WorkletSynthesizer(context);
+          synth.connect(context.destination);
+
+          // Add the MS SoundBank
+          await synth.soundBankManager.addSoundBank(dlsBuffer, "main");
+
+          // 4. Create the Sequencer and set it to loop
+          const seq = new Sequencer(synth);
+          seq.loopCount = Infinity;
+
+          // Load the song into the sequencer
+          seq.loadNewSongList([{ binary: midiBuffer }]);
+
+          // AudioContext must be resumed after the click event
+          await context.resume();
+          seq.play();
+
+          isPlaying = true;
+          startButton.innerHTML = "<i>playing</i>";
+        } catch (error) {
+          console.error("Error initializing SpessaSynth:", error);
+          startButton.innerHTML = "<i>error</i>";
+        }
+      });
+    </script>
+  </body>
+</html>
